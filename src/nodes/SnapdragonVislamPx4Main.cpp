@@ -54,7 +54,6 @@ private:
   int    _main_task = -1;      /**< handle for task */
   std::atomic<bool> thread_stop_;
   int previous_mv_tracking_state_ = MV_TRACKING_STATE_FAILED;
-  int _all_sensors_sub = -1;
   orb_advert_t pose_pub = nullptr;
   orb_advert_t status_pub = nullptr;
 
@@ -87,7 +86,8 @@ Vislam::~Vislam()
       usleep(20000);
 
       /* if we have given up, kill it */
-      if (++i > 50) {
+      if (++i > 500) {
+        PX4_WARN("Snapdragon vislam didn't exit in time, killing it");
         px4_task_delete(_main_task);
         break;
       }
@@ -303,6 +303,7 @@ void Vislam::task_main()
   }
 
   PX4_INFO( "Snapdragon::RosNodeVislam::VislamThreadMain: Exising VISLAM Thread" );
+  _main_task = -1;
   return;
 }
 
@@ -462,6 +463,7 @@ int snapdragon_mv_main(int argc, char *argv[])
 
   if (!strcmp(argv[1], "stop")) {
     delete snapdragon_mv::g_vislam;
+    PX4_INFO("stop done cli");
     snapdragon_mv::g_vislam = nullptr;
   } else if (!strcmp(argv[1], "status")) {
     snapdragon_mv::g_vislam->status();
