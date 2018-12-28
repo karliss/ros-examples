@@ -33,13 +33,12 @@
 #include <mutex>
 #include <atomic>         // std::atomic
 #include <time.h>         // clock_gettime
-#include <ros/ros.h>
-#include <sensor_msgs/Imu.h>
-#include <geometry_msgs/Vector3.h>
-#include <geometry_msgs/Quaternion.h>
+#include <uORB/topics/sensor_combined.h>
 #include "SnapdragonCameraTypes.hpp"
 #include "mvVISLAM.h"
 #include "SnapdragonCameraManager.hpp"
+#include <queue>
+#include <thread>
 
 namespace Snapdragon {
   class VislamManager;
@@ -84,7 +83,7 @@ public:
   /**
    * Constructor
    **/
-  VislamManager(ros::NodeHandle nh);
+  VislamManager();
 
   /**
    * Initalizes the VISLAM Manager with Camera and VISLAM Parameters
@@ -164,7 +163,8 @@ public:
   virtual ~VislamManager();
 
 private:
-  void ImuCallback(const sensor_msgs::Imu::ConstPtr& msg);
+  void ImuCallback(const sensor_combined_s& msg);
+  void ImuLoop();
 
   // utility methods
   int32_t CleanUp();
@@ -179,6 +179,7 @@ private:
   uint8_t*                      image_buffer_;
   size_t                        image_buffer_size_bytes_;
 
-  ros::NodeHandle nh_;
-  ros::Subscriber imu_sub_;
+  std::queue<sensor_combined_s> sensor_queue;
+  std::atomic<bool> stop_imu;
+  std::thread imu_read_thread;
 };

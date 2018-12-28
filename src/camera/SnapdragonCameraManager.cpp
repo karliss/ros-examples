@@ -199,12 +199,12 @@ int32_t Snapdragon::CameraManager::Start() {
 }
 
 int32_t Snapdragon::CameraManager::Stop() {
+  std::lock_guard<std::mutex> lock( frame_mutex_ );
   if( running_ ) {
     camera_ptr_->stopPreview();
   }
   running_ = false;
 
-  std::lock_guard<std::mutex> lock( frame_mutex_ );
   //increment the frame id so that the condition variable is woken up.
   next_frame_id_++;
   frame_cv_.notify_all();
@@ -212,7 +212,10 @@ int32_t Snapdragon::CameraManager::Stop() {
   //if there are any frames that are not read. free the frames
   while( frame_q_read_index_ != frame_q_write_index_ ) {
     if( frame_queue_[frame_q_read_index_].second != nullptr ) {
-      frame_queue_[frame_q_read_index_].second->releaseRef();
+      // It isn't fully confirmed but it seems that stopping Preview also frees the frames
+      // See https://github.com/ATLFlight/snap_cam_manager/issues/1 and
+      // https://github.com/genemerewether/sdflight-cameras.git
+      // frame_queue_[frame_q_read_index_].second->releaseRef();
       frame_queue_[frame_q_read_index_] = std::make_pair( -1, nullptr );
       frame_q_read_index_++;
       frame_q_read_index_ = ( frame_q_read_index_ >= camera_config_ptr_->num_image_buffers)?0:frame_q_read_index_;
@@ -242,9 +245,9 @@ void Snapdragon::CameraManager::UpdateGainAndExposure()
       ||
       abs(exposure_target_ - exposure_setting_) > camera_config_ptr_->cpa_exposure_change_threshold 
       ||
-      abs(gain_target_ - gain_setting_) > camera_config_ptr_->cpa_gain_change_threshold
+      (abs(gain_target_ - gain_setting_) > camera_config_ptr_->cpa_gain_change_threshold
       &&
-      (exposure_target_ != exposure_setting_ || gain_target_ != gain_setting_)
+      (exposure_target_ != exposure_setting_ || gain_target_ != gain_setting_))
     ) {
 
         time_last = time_now;
@@ -288,7 +291,6 @@ int32_t Snapdragon::CameraManager::GetNextImageData
 ) {
   
   std::unique_lock<std::mutex> lock( frame_mutex_ );
-  int32_t ret_code = 0;
 
   // wait for new frame if queue is empty. 
   frame_cv_.wait( lock, [&]{ return (frame_q_read_index_ != frame_q_write_index_); } );
@@ -377,7 +379,7 @@ void Snapdragon::CameraManager::onPreviewFrame(camera::ICameraFrame* frame)
     uint64_t timestamp_nsecs = frame->timeStamp;
     uint32_t dt_nsecs = timestamp_nsecs - timestamp_last_nsecs_;
     timestamp_last_nsecs_ = timestamp_nsecs;
-    fps_avg_ = ((fps_avg_ * old_frame_id) + (1e9 / dt_nsecs)) / (next_frame_id_);
+    fps_avg_ = ((fps_avg_ * old_frame_id) + (1e9f / dt_nsecs)) / (next_frame_id_);
   }
   else{
     WARN_PRINT( "Got duplicate image frame at timestamp: %lld frame_id: %llu", frame->timeStamp, next_frame_id_ );

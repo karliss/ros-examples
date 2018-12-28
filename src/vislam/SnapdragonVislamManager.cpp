@@ -31,8 +31,14 @@
  ****************************************************************************/
 #include "SnapdragonVislamManager.hpp"
 #include "SnapdragonDebugPrint.h"
+#include "drivers/drv_hrt.h"
 
-Snapdragon::VislamManager::VislamManager(ros::NodeHandle nh) : nh_(nh) {
+#include <px4_tasks.h>
+#include <px4_includes.h>
+#include <px4_posix.h>
+#include <uORB/topics/vehicle_odometry.h>
+
+Snapdragon::VislamManager::VislamManager() {
   cam_man_ptr_ = nullptr;
   vislam_ptr_ = nullptr;
   initialized_ = false;
@@ -45,12 +51,10 @@ Snapdragon::VislamManager::~VislamManager() {
 }
 
 void Snapdragon::VislamManager::ImuCallback(
-    const sensor_msgs::Imu::ConstPtr& msg)
+    const sensor_combined_s& msg)
 {
   // Convert from ENU (mavros) to NED (vislam expectation) frame
-  sensor_msgs::Imu msg_ned = *msg;
-
-  int64_t current_timestamp_ns = msg->header.stamp.toNSec();
+  int64_t current_timestamp_ns = msg.timestamp * 1000;
 
   static int64_t last_timestamp = 0;
   float delta = 0.f;
@@ -60,8 +64,7 @@ void Snapdragon::VislamManager::ImuCallback(
   {
     if (current_timestamp_ns < last_timestamp)
     {
-      ROS_WARN_STREAM_THROTTLE(1, "Bad IMU timestamp order, dropping data [ns]\t"
-        << last_timestamp << " " << current_timestamp_ns);
+      PX4_WARN("Bad IMU timestamp order, dropping data [ns]\t%lld %lld", last_timestamp, current_timestamp_ns);
       return;
     }
 
@@ -72,50 +75,43 @@ void Snapdragon::VislamManager::ImuCallback(
       if (cam_params_.verbose)
       {
         WARN_PRINT("IMU sample dt > %f ms -- %f ms",
-                   imu_sample_dt_reasonable_threshold_ms, delta);
+                   (double)imu_sample_dt_reasonable_threshold_ms, (double)delta);
       }
     }
   }
-  last_timestamp = current_timestamp_ns;
-
-  ROS_INFO_STREAM_THROTTLE(1, "IMU timestamp [ns]: \t" << last_timestamp);
-
-  // Parse IMU message
-  float lin_acc[3], ang_vel[3];
-
-  // Convert RAW IMU to correct scale
-  lin_acc[0] = msg->linear_acceleration.x;
-  lin_acc[1] = msg->linear_acceleration.y;
-  lin_acc[2] = msg->linear_acceleration.z;
-  ang_vel[0] = msg->angular_velocity.x;
-  ang_vel[1] = msg->angular_velocity.y;
-  ang_vel[2] = msg->angular_velocity.z;
-
-  // Check for dropped IMU messages
-  static uint32_t sequence_number_last = 0;
-  int num_dropped_samples = 0;
-  if (sequence_number_last != 0)
-  {
-    // The diff should be 1, anything greater means we dropped samples
-    num_dropped_samples = msg->header.seq - sequence_number_last - 1;
-    if (num_dropped_samples > 0)
-    {
-      if (cam_params_.verbose)
-      {
-        WARN_PRINT("Current IMU sample = %u, last IMU sample = %u",
-                   msg->header.seq, sequence_number_last);
-      }
-    }
-  }
-  // sequence_number_last = imu_samples[ii].sequence_number;
-  sequence_number_last = msg->header.seq;
 
   // Feed IMU message to VISLAM
   std::lock_guard<std::mutex> lock(sync_mutex_);
-  mvVISLAM_AddAccel(vislam_ptr_, current_timestamp_ns, lin_acc[0], lin_acc[1],
-                    lin_acc[2]);
-  mvVISLAM_AddGyro(vislam_ptr_, current_timestamp_ns, ang_vel[0], ang_vel[1],
-                   ang_vel[2]);
+  sensor_queue.push(msg);
+}
+
+void Snapdragon::VislamManager::ImuLoop() {
+  int all_sensors_sub = orb_subscribe(ORB_ID(sensor_combined));
+
+  const int message_count = 1;
+  px4_pollfd_struct_t fds[message_count];
+
+  // Setup of loop
+  fds[0].fd = all_sensors_sub;
+  fds[0].events = POLLIN;
+  while (!stop_imu) {
+    int poll_ret = px4_poll(fds, message_count, 500);
+    if (poll_ret == 0) {
+      PX4_WARN("Vislam not getting any data");
+    } else if (poll_ret < 0) {
+      PX4_ERR("px4_poll failed");
+      break;
+    } else {
+      if (fds[0].revents & POLLIN) {
+        sensor_combined_s sensor_data;
+        orb_copy(ORB_ID(sensor_combined), all_sensors_sub, &sensor_data);
+        ImuCallback(sensor_data);
+      }
+    }
+  }
+
+  orb_unsubscribe(all_sensors_sub);
+
 }
 
 int32_t Snapdragon::VislamManager::CleanUp() {
@@ -209,8 +205,9 @@ int32_t Snapdragon::VislamManager::Start() {
     image_buffer_ = new uint8_t[ image_buffer_size_bytes_ ];
 
     // Setup publishers/subscribers
-    imu_sub_ = nh_.subscribe("mavros/imu/data_raw", 10,
-                            &Snapdragon::VislamManager::ImuCallback, this);
+    // Vislam image processing takes longer than time between IMU samples so
+    // put IMU gathering in seperate thread to avoid droping samples.
+    imu_read_thread = std::thread(&VislamManager::ImuLoop, this);
   }
   else {
     ERROR_PRINT( "Calling Start without calling intialize" );
@@ -223,7 +220,11 @@ int32_t Snapdragon::VislamManager::Stop() {
   CleanUp();
 
   // Unsubscribe from IMU topic
-  imu_sub_.shutdown();
+  stop_imu = true;
+  if (imu_read_thread.joinable()) {
+    imu_read_thread.join();
+  }
+
   return 0;
 }
 
@@ -263,29 +264,24 @@ int32_t Snapdragon::VislamManager::GetPose( mvVISLAMPose& pose, int64_t& pose_fr
 
     // adjust the frame-timestamp for VISLAM at it needs the time at the center of the exposure and not the sof.
     // Correction from exposure time
-    float correction = 1e3 * (cam_man_ptr_->GetExposureTimeUs()/2.f);
+    float correction = 1e3f * (cam_man_ptr_->GetExposureTimeUs()/2.f);
 
-    // Adjust timestamp with clock offset MONOTONIC <-> REALTIME:
-    // Camera images will correctly have REALTIME timestamps, IMU messages
-    // however carry the MONOTONIC timestamp.
-    timespec mono_time, wall_time;
-    if (clock_gettime(CLOCK_MONOTONIC, &mono_time) ||
-        clock_gettime(CLOCK_REALTIME, &wall_time))
+    uint64_t modified_timestamp = frame_ts_ns - static_cast<uint64_t>(correction);// + clock_offset_ns;
+
     {
-      ERROR_PRINT("Cannot access clock time");
-      return -1;
-    }
-    // TODO: Perhaps filter clock_offset_ns. So far I only observed jumps of 1 milisecond though.
-    int64_t clock_offset_ns = (wall_time.tv_sec - mono_time.tv_sec) * 1e9 +
-                               wall_time.tv_nsec - mono_time.tv_nsec;
-    uint64_t modified_timestamp = frame_ts_ns - static_cast<uint64_t>(correction) + clock_offset_ns;
-    {
-      std::lock_guard<std::mutex> lock( sync_mutex_ );
+      {
+        std::lock_guard<std::mutex> lock( sync_mutex_ );
+        while (!sensor_queue.empty() && 1000*sensor_queue.front().timestamp < modified_timestamp) {
+          auto& msg = sensor_queue.front();
+          mvVISLAM_AddGyro(vislam_ptr_, msg.timestamp*1000 + msg.accelerometer_timestamp_relative * 1000LL, msg.gyro_rad[0], msg.gyro_rad[1], msg.gyro_rad[2]);
+          mvVISLAM_AddAccel(vislam_ptr_, msg.timestamp*1000, msg.accelerometer_m_s2[0], msg.accelerometer_m_s2[1], msg.accelerometer_m_s2[2]);
+          sensor_queue.pop();
+        }
+      }
       mvVISLAM_AddImage(vislam_ptr_, modified_timestamp, image_buffer_ );
       pose = mvVISLAM_GetPose(vislam_ptr_);
       pose_frame_id = frame_id;
       timestamp_ns = static_cast<uint64_t>(modified_timestamp);
-      ROS_INFO_STREAM_THROTTLE(1, "Image timestamp [ns]: \t" << modified_timestamp);
     }
   }
   return rc;

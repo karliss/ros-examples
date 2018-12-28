@@ -30,6 +30,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
+#include "px4_defines.h"
 
 #ifdef __cplusplus
 extern "C"{
@@ -45,11 +46,9 @@ typedef enum
   SNAP_DEBUG_PRINT_TYPE_ERROR,
 } SnapDebugPrintType;
 
-#define INFO_PRINT(fmt, ...) { snapdragon_debug_print(SNAP_DEBUG_PRINT_TYPE_INFO,   "%s %d: " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__); }
-#define WARN_PRINT(fmt, ...) { snapdragon_debug_print(SNAP_DEBUG_PRINT_TYPE_WARN,   "%s %d: " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__); }
-#define ERROR_PRINT(fmt, ...) { snapdragon_debug_print(SNAP_DEBUG_PRINT_TYPE_ERROR, "%s %d: " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__); }
-
-int snapdragon_debug_print(SnapDebugPrintType print_type, const char * fmt, ...);
+#define INFO_PRINT(fmt, ...) PX4_INFO(fmt, ##__VA_ARGS__) // { snapdragon_debug_print(SNAP_DEBUG_PRINT_TYPE_INFO,   "%s %d: " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__); }
+#define WARN_PRINT(fmt, ...) PX4_WARN(fmt, ##__VA_ARGS__) // { snapdragon_debug_print(SNAP_DEBUG_PRINT_TYPE_INFO,   "%s %d: " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__); }
+#define ERROR_PRINT(fmt, ...) PX4_ERR(fmt, ##__VA_ARGS__) // { snapdragon_debug_print(SNAP_DEBUG_PRINT_TYPE_INFO,   "%s %d: " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__); }
 
 #ifdef __cplusplus
 }
