@@ -1,93 +1,43 @@
-# Snapdragon Flight VISLAM-ROS Sample Code
-This repository is a fork of the VISLAM from ATLFlight/ros-examples, modified to work with the px4 flight stack. The original README can be found in the [ATLFlight/ros-examples](https://github.com/ATLFlight/ros-examples/blob/master/README.md) repository.
+# PX4 Snapdragon Machine Vision module
+This repository contains px4 module which uses [Snapdragon Machine Vision SDK](https://developer.qualcomm.com/software/machine-vision-sdk) for VISLAM. It is based on [PX4/ros-examples](https://github.com/PX4/ros-examples) which is a fork of [ATLFlight/ros-examples](https://github.com/ATLFlight/ros-examples) with the required changes to work as px4 module. Compared to ros-examples it reads IMU data and publishes result directly to PX4 instead of going through mavlink,mavros and ros.
 
-## Preparations
-### Mavros
-Get the mavros sources into your catkin's source directory by following the instructions from the [mavros git page](https://github.com/mavlink/mavros/tree/master/mavros#source-installation). Last tested version of mavros is version [0.19](https://github.com/mavlink/mavros/releases/tag/0.19.0) and the respective commit [399a04ef57](https://github.com/mavlink/mavros/tree/399a04ef5739bd93fe1c596b63d6bdbfba7d84ef).
-
-This example code is for MV SDK release [mv_1.0.2](https://developer.qualcomm.com/hardware/snapdragon-flight/tools).
-
-**NOTE**: The older release(mv0.9.1) instructions are [here](https://github.com/ATLFlight/ros-examples/tree/master).
-
-**NOTE**: Step 3 should also include `--rosdistro kinetic` flag.
-
-### Other packages
-On a freshly flashed snapdragon, I had to install the following packages
-* python pip
-* python future (`pip install future`)
-* `sudo apt-get install ros-indigo-diagnostic-updater ros-indigo-angles ros-indigo-eigen-conversions ros-indigo-urdf ros-indigo-tf ros-indigo-control-toolbox`
-  If `control-toolbox` cannot be installed due to unmet dependencies, you might have to install the missing dependency yourself. In my case overwriting an existing file was necessary for the package `fontconfig-config`. That can be done with
-  `sudo apt-get -o Dpkg::Options::="--force-overwrite" install fontconfig-config`
-
-## Build
-`catkin build`
-
-Compiling mavros can easily take 30 minutes on the snapdragon. You might have to create a swap file when building catkin. Check [this website](https://www.digitalocean.com/community/tutorials/how-to-add-swap-space-on-ubuntu-16-04) on how to do that.
 
 ## High-Level Block Diagram
 ![SnapVislamRosNodeBlockDiagram](images/SnapVislamRosNodeBlockDiagram.jpg)
 
 ## Setup and build process
 
-**NOTE:** These instructions are for VISLAM version mv_0.9.1_8x74.deb.  For earlier versions refer to [this](https://github.com/ATLFlight/ros-examples) page.
-
+**NOTE:** These instructions are for VISLAM version 1.1.9. Snapdragon MV API has changed between 0.9.1 and 1.1.9. Using with  
 
 ### Summary of changes from previous release
 
-| Item | Previous release - mv0.8 | Current Release - mv0.9.1 | Future Release mv 1.0.2 |
+| Item | Previous release - mv0.8 | Previous Release - mv0.9.1 | Current Release mv 1.0.2, 1.1.9 |
 |----|----|----|----|
 |MV_SDK environment variable| needed | Not needed.  The new mv installation puts the library files under /usr/lib | Not needed |
 |MV License file installation | needed.  Should be placed in the /opt/qualcomm/mv/lib/mv/bin/lin/8x74/ | needed should be placed at /usr/lib | needed should be placed at /opt/qcom-licenses/ |
 |MV link library Name| libmv.so | libmv1.so.  Update the respective make files to link against libmv1 instead of libmv.so | same as mv 0.9.1 |
 
-The current build process is supported only on-target (i.e. on the Snapdragon Flight<sup>TM</sup> Board).  Future release(s) will support off-target cross-compilation on a host computer.
-
-The following is an overall workflow for installation, build and execution of the ROS sample apps for Snapdragon Flight<sup>TM</sup>
-
-![Installation and build Work Flow](images/InstallationAndBuildWorkflow.jpg)
-
 ### Pre-requisites
 
 #### Platform BSP
 
-These instructions were tested with version **Flight_3.1.3**. The latest version of the software can be downloaded from [here](http://support.intrinsyc.com/projects/snapdragon-flight/files) and  installed by following the instructions found [here](http://support.intrinsyc.com/projects/snapdragon-flight/wiki)
+These instructions were tested with version **Flight_3.1.3.1**. The latest version of the software can be downloaded from [here](http://support.intrinsyc.com/projects/snapdragon-flight/files) and  installed by following the instructions found [here](http://support.intrinsyc.com/projects/snapdragon-flight/wiki)
 
-**NOTE**: By default the HOME environment variable is not set.  Set this up doing the following:
-
-```
-adb shell
-chmod +rw /home/linaro
-echo "export HOME=/home/linaro/" >> /home/linaro/.bashrc
-```
-
-If you use SSH, the home environment variable should be set correct after the above step.
-If you use ADB, do the following for each session:
-
-```
-adb shell
-source /home/linaro/.bashrc
-```
-
-
-#### Install ROS on Snapdragon Platform.
-
-Refer to the following [page](https://github.com/ATLFlight/ATLFlightDocs/blob/master/SnapdragonROSInstallation.md) for ROS installation on Snapdragon Flight<sup>TM</sup> platform.
 
 #### Install Snapdragon Machine Vision SDK
 
-* Download the latest Snapdragon Machine Vision SDK from [here](https://developer.qualcomm.com/sdflight-tools)
+* Download the latest Snapdragon Machine Vision SDK from [here](https://developer.qualcomm.com/software/machine-vision-sdk)
 * The package name will be mv\<version\>.deb.  
-** Example: *mv1.0.2_8x74.deb*
+** Example: *mv1.1.9_8x74.deb*
 * push the deb package to the target and install it.
 
 ```
 adb push mv<version>.deb /home/linaro
-adb shell sync
-adb shell
+adb shell 
 dpkg -i /home/linaro/mv<version>.deb
 ```
 
-*NOTE:* MV release 0.8 and earlier required to set the MV_SDK environment variable.  This is no longer needed.  Make sure to unset this variable if it is set.  Not doing so will give an compilation error that says, "mv.h" file is not found.
+* Unpack the .deb file to obtain headers and lib for cross-compilation. Set `MV_SDK` environment variable to the folder containing `usr` folder.
 
 #### Machine Vision SDK License Installation
 
@@ -106,45 +56,19 @@ adb shell sync
 
 ### Clone and build sample code
 
-#### Setup ROS workspace on target
-
-```
-adb shell
-source /home/linaro/.bashrc
-mkdir -p /home/linaro/ros_ws/src
-cd /home/linaro/ros_ws/src
-catkin_init_workspace
-cd ../
-catkin_make
-echo "source /home/linaro/ros_ws/devel/setup.bash" >> /home/linaro/.bashrc
-```
-
-This ensures that the ROS workspace is setup correctly.
-
-#### Clone the sample code
-* The repo may be cloned directly on the target (catkin workspace), or cloned on the host computer and then pushed to the target using ADB. The recommended method is to clone directly on the target.
-
-* Build the code
+* Clone this repository in one of the PX4/Firmware module folders - modules or examples.
+* Add px4_snapdragon_mv to px4 module list in the cmake file for app processor boards/atlflight/eagle/default.cmake
+* Add snap_vislam_status.msg to the uorb message list.
+* Build and install as usual `make eagle_default upload`. See PX4 devguide snapdragon instructions for more information. 
+  
+*untested* Alternatively follow out of tree module [instructions](https://dev.px4.io/en/advanced/out_of_tree_modules.html).
 
 ## Configure
-Copy the px4 configuration files from `./px4_configs` to their respective location on the snapdragon. For using the recommended EKF2:
-```
-cd snapdragon_mavros_vislam
-adb push ./px4_confs/ekf2/mainapp.conf /home/linaro/mainapp_vislam.conf
-```
-
-The configurations are intended to provide a working starting point. Adjust parameters to your likings.
+* Configure EKF2 to use visual position and height
+* EKF2_AID_MASK 24
+* EKF2_HGT_MODE 3
+* EKF2_EV_DELAY ~5-30 (default is 175ms) adjust by comparing local position estimate and vision position/ODOMETRY
+* MAV_ODOM_LP 1 - send vislam position over MAVlink as ODOMETRY, useful for debuging 
 
 ## Run
-In a terminal, launch mavros and vislam
-```
-adb shell
-roslaunch snapdragon_mavros_vislam mavros_vislam.launch
-```
-
-Start the px4 flight stack
-```
-adb shell
-cd $HOME
-./px4 mainapp_vislam.config
-```
+Start px4 module using `snapdragon_mv start` in PX4 shell or main configuration to start automatically.
