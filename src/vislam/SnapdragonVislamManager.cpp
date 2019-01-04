@@ -38,6 +38,8 @@
 #include <px4_posix.h>
 #include <uORB/topics/vehicle_odometry.h>
 
+static const size_t IMU_QUEUE_SIZE = 32;
+
 Snapdragon::VislamManager::VislamManager() {
   cam_man_ptr_ = nullptr;
   vislam_ptr_ = nullptr;
@@ -62,18 +64,15 @@ void Snapdragon::VislamManager::ImuCallback(
   // Sanity check on IMU timestamp
   if (last_timestamp != 0)
   {
-    if (current_timestamp_ns < last_timestamp)
-    {
+    if (current_timestamp_ns < last_timestamp) {
       PX4_WARN("Bad IMU timestamp order, dropping data [ns]\t%lld %lld", last_timestamp, current_timestamp_ns);
       return;
     }
 
     delta = (current_timestamp_ns - last_timestamp) * 1e-6;
-    const float imu_sample_dt_reasonable_threshold_ms = 2.5;
-    if (delta > imu_sample_dt_reasonable_threshold_ms)
-    {
-      if (cam_params_.verbose)
-      {
+    const float imu_sample_dt_reasonable_threshold_ms = 4 * 2;
+    if (delta > imu_sample_dt_reasonable_threshold_ms) {
+      if (cam_params_.verbose || delta > 10 * imu_sample_dt_reasonable_threshold_ms) {
         WARN_PRINT("IMU sample dt > %f ms -- %f ms",
                    (double)imu_sample_dt_reasonable_threshold_ms, (double)delta);
       }
@@ -82,6 +81,10 @@ void Snapdragon::VislamManager::ImuCallback(
 
   // Feed IMU message to VISLAM
   std::lock_guard<std::mutex> lock(sync_mutex_);
+  if (sensor_queue.size() >= IMU_QUEUE_SIZE) {
+    WARN_PRINT("IMU queue full.");
+    sensor_queue.pop();
+  }
   sensor_queue.push(msg);
 }
 
@@ -217,10 +220,11 @@ int32_t Snapdragon::VislamManager::Start() {
 }
 
 int32_t Snapdragon::VislamManager::Stop() {
+  stop_imu = true;
+
   CleanUp();
 
   // Unsubscribe from IMU topic
-  stop_imu = true;
   if (imu_read_thread.joinable()) {
     imu_read_thread.join();
   }
